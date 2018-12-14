@@ -200,7 +200,7 @@
 				}
 			}
 		},
-		"PrivateRouteTable" : {
+		"PrivateRouteTable01" : {
 			"Type" : "AWS::EC2::RouteTable",
 			"DependsOn" : "AttachGateway",
 			"Properties" : {
@@ -209,32 +209,46 @@
 				},
 				"Tags" : [{
 						"Key" : "Name",
-						"Value" : "Private"
+						"Value" : "Private01"
+					}
+				]
+			}
+		},
+		"PrivateRouteTable02" : {
+			"Type" : "AWS::EC2::RouteTable",
+			"DependsOn" : "AttachGateway",
+			"Properties" : {
+				"VpcId" : {
+					"Ref" : "VPC"
+				},
+				"Tags" : [{
+						"Key" : "Name",
+						"Value" : "Private02"
 					}
 				]
 			}
 		},
 		"PrivateSubnet1RouteTableAssociation" : {
 			"Type" : "AWS::EC2::SubnetRouteTableAssociation",
-			"DependsOn" : ["PublicRouteTable", "PrivateSubnet1", "AttachGateway"],
+			"DependsOn" : ["PrivateRouteTable01", "PrivateSubnet1", "AttachGateway"],
 			"Properties" : {
 				"SubnetId" : {
 					"Ref" : "PrivateSubnet1"
 				},
 				"RouteTableId" : {
-					"Ref" : "PrivateRouteTable"
+					"Ref" : "PrivateRouteTable01"
 				}
 			}
 		},
         "PrivateSubnet2RouteTableAssociation" : {
 			"Type" : "AWS::EC2::SubnetRouteTableAssociation",
-			"DependsOn" : ["PublicRouteTable", "PrivateSubnet2", "AttachGateway"],
+			"DependsOn" : ["PrivateRouteTable02", "PrivateSubnet2", "AttachGateway"],
 			"Properties" : {
 				"SubnetId" : {
 					"Ref" : "PrivateSubnet2"
 				},
 				"RouteTableId" : {
-					"Ref" : "PrivateRouteTable"
+					"Ref" : "PrivateRouteTable02"
 				}
 			}
 		},
@@ -252,7 +266,7 @@
 				]
 			}
 		},
-		"NATInstance" : {
+		"NATInstance1" : {
 			"Type" : "AWS::EC2::Instance",
 			"DependsOn" : ["AttachGateway", "PublicRoute", "PublicSubnet1"],
 			"Properties" : {
@@ -273,7 +287,7 @@
 				"SourceDestCheck" : "false",
 				"Tags" : [{
 						"Key" : "Name",
-						"Value" : "NAT"
+						"Value" : "NAT01"
 					}
 				],
 				"UserData" : {
@@ -298,9 +312,55 @@
 				}
 			}
 		},
+		"NATInstance2" : {
+			"Type" : "AWS::EC2::Instance",
+			"DependsOn" : ["AttachGateway", "PublicRoute", "PublicSubnet1"],
+			"Properties" : {
+				"ImageId" : {"Fn::FindInMap" : [ "AmazonLinuxAMI", { "Ref" : "AWS::Region" }, "AMI" ]},
+				"InstanceType" : "t2.small",
+				"NetworkInterfaces" : [{
+						"DeviceIndex" : "0",
+						"AssociatePublicIpAddress" : "true",
+							"SubnetId" : {
+								"Ref" : "PublicSubnet2"
+						},
+						"GroupSet" : [{
+							"Ref" : "NATSecurityGroup"
+							}
+						]
+					}
+				],
+						"SourceDestCheck" : "false",
+						"Tags" : [{
+								"Key" : "Name",
+								"Value" : "NAT02"
+							}
+						],
+				"UserData" : {
+					"Fn::Base64" : {
+						"Fn::Join" : [
+							"\n",
+							[
+								"#!/bin/bash",
+								"yum -y update",
+								"echo 1 > /proc/sys/net/ipv4/ip_forward",
+								"echo 0 > /proc/sys/net/ipv4/conf/eth0/send_redirects",
+								"/sbin/iptables -t nat -A POSTROUTING -o eth0 -s 0.0.0.0/0 -j MASQUERADE",
+								"/sbin/iptables-save > /etc/sysconfig/iptables",
+								"mkdir -p /etc/sysctl.d/",
+								"cat <<EOF > /etc/sysctl.d/nat.conf",
+								"net.ipv4.ip_forward = 1",
+								"net.ipv4.conf.eth0.send_redirects = 0",
+								"EOF \n"
+							]
+						]
+					}
+				}
+			}
+		},
 		"NATSecurityGroup" : {
 			"Type" : "AWS::EC2::SecurityGroup",
-			"DependsOn" : "AttachGateway",
+			"DependsOn" : ["AttachGateway","BastionServerSecurityGroup"],
 			"Properties" : {
 				"GroupDescription" : "Enable internal access to the NAT device",
 				"VpcId" : {
@@ -316,6 +376,13 @@
 						"FromPort" : "0",
 						"ToPort" : "1024",
 						"CidrIp" : "10.1.50.0/24"
+					},  {
+						"IpProtocol" : "udp",
+						"FromPort" : "0",
+						"ToPort" : "1024",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "BastionServerSecurityGroup", "GroupId" ]
+						}
 					}
 				],
 				"SecurityGroupEgress" : [{
@@ -332,16 +399,29 @@
 				]
 			}
 		},
-		"PrivateRoute" : {
+		"PrivateRoute01" : {
 			"Type" : "AWS::EC2::Route",
-			"DependsOn" : ["NATInstance", "PrivateRouteTable"],
+			"DependsOn" : ["NATInstance1", "PrivateRouteTable01"],
 			"Properties" : {
 				"RouteTableId" : {
-					"Ref" : "PrivateRouteTable"
+					"Ref" : "PrivateRouteTable01"
 				},
 				"DestinationCidrBlock" : "0.0.0.0/0",
 				"InstanceId" : {
-					"Ref" : "NATInstance"
+					"Ref" : "NATInstance1"
+				}
+			}
+		},
+		"PrivateRoute02" : {
+			"Type" : "AWS::EC2::Route",
+			"DependsOn" : ["NATInstance2", "PrivateRouteTable02"],
+			"Properties" : {
+				"RouteTableId" : {
+					"Ref" : "PrivateRouteTable02"
+				},
+				"DestinationCidrBlock" : "0.0.0.0/0",
+				"InstanceId" : {
+					"Ref" : "NATInstance2"
 				}
 			}
 		},
@@ -374,7 +454,7 @@
 		},
 		"BastionServer" : {
 			"Type" : "AWS::EC2::Instance",
-			"DependsOn" : ["NATInstance"],
+			"DependsOn" : ["NATInstance1"],
 			"Properties" : {
 				"ImageId" : {"Fn::FindInMap" : [ "AmazonLinuxAMI", { "Ref" : "AWS::Region" }, "AMI" ]},
 				"InstanceType" : "t2.small",
@@ -409,6 +489,274 @@
 						]
 					}
 				}
+			}
+		},
+		"FrontEndELBSecurityGroup" : {
+			"Type" : "AWS::EC2::SecurityGroup",
+			"DependsOn" : ["PublicSubnet1","PublicSubnet2"],
+			"Properties" : {
+				"GroupDescription" : "Security Group for Frontend Load Balancer",
+				"VpcId" : {
+					"Ref" : "VPC"
+				},
+				"Tags" : [{
+						"Key" : "Name",
+						"Value" : "FrontEndELBSecurityGroup"
+					}, {
+						"Key" : "ResourceGroup",
+						"Value" : "CloudFormationResource"
+					}
+				],
+				"SecurityGroupIngress" : [{
+						"IpProtocol" : "tcp",
+						"FromPort" : "80",
+						"ToPort" : "80",
+						"CidrIp" : "0.0.0.0/0"
+					},{
+						"IpProtocol" : "tcp",
+						"FromPort" : "0",
+						"ToPort" : "443",
+						"CidrIp" : "0.0.0.0/0"
+					}
+				]
+			}
+		},
+		"NginxWebServerSecurityGroup" : {
+			"Type" : "AWS::EC2::SecurityGroup",
+			"DependsOn" : "AttachGateway",
+			"Properties" : {
+				"GroupDescription" : "Security Group for Nginx WebServer",
+				"VpcId" : {
+					"Ref" : "VPC"
+				},
+				"Tags" : [{
+						"Key" : "Name",
+						"Value" : "NginxWebServerSecurityGroup"
+					}, {
+						"Key" : "ResourceGroup",
+						"Value" : "CloudFormationResource"
+					}
+				],
+				"SecurityGroupIngress" : [{
+						"IpProtocol" : "tcp",
+						"FromPort" : "22",
+						"ToPort" : "22",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "BastionServerSecurityGroup", "GroupId" ]
+						}
+					},{
+						"IpProtocol" : "tcp",
+						"FromPort" : "80",
+						"ToPort" : "80",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "FrontEndELBSecurityGroup", "GroupId" ]
+						}
+					}
+				]
+			}
+		},
+		"AppServerSecurityGroup" : {
+			"Type" : "AWS::EC2::SecurityGroup",
+			"DependsOn" : "AttachGateway",
+			"Properties" : {
+				"GroupDescription" : "Security Group for App servers - jetty,php,nodejs,java",
+				"VpcId" : {
+					"Ref" : "VPC"
+				},
+				"Tags" : [{
+						"Key" : "Name",
+						"Value" : "AppServerSecurityGroup"
+					}, {
+						"Key" : "ResourceGroup",
+						"Value" : "CloudFormationResource"
+					}
+				],
+				"SecurityGroupIngress" : [{
+						"IpProtocol" : "tcp",
+						"FromPort" : "22",
+						"ToPort" : "22",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "BastionServerSecurityGroup", "GroupId" ]
+						}
+					},{
+						"IpProtocol" : "tcp",
+						"FromPort" : "80",
+						"ToPort" : "80",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "NginxWebServerSecurityGroup", "GroupId" ]
+						}
+					}
+				]
+			}
+		},
+		"GWServerSecurityGroup" : {
+			"Type" : "AWS::EC2::SecurityGroup",
+			"DependsOn" : "AttachGateway",
+			"Properties" : {
+				"GroupDescription" : "Security Group for GW servers",
+				"VpcId" : {
+					"Ref" : "VPC"
+				},
+				"Tags" : [{
+						"Key" : "Name",
+						"Value" : "GWServerSecurityGroup"
+					}, {
+						"Key" : "ResourceGroup",
+						"Value" : "CloudFormationResource"
+					}
+				],
+				"SecurityGroupIngress" : [{
+						"IpProtocol" : "tcp",
+						"FromPort" : "22",
+						"ToPort" : "22",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "BastionServerSecurityGroup", "GroupId" ]
+						}
+					},{
+						"IpProtocol" : "tcp",
+						"FromPort" : "80",
+						"ToPort" : "80",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "AppServerSecurityGroup", "GroupId" ]
+						}
+					}
+				]
+			}
+		},
+		"AdminServerSecurityGroup" : {
+			"Type" : "AWS::EC2::SecurityGroup",
+			"DependsOn" : "AttachGateway",
+			"Properties" : {
+				"GroupDescription" : "Security Group for Admin servers",
+				"VpcId" : {
+					"Ref" : "VPC"
+				},
+				"Tags" : [{
+						"Key" : "Name",
+						"Value" : "AdminServerSecurityGroup"
+					}, {
+						"Key" : "ResourceGroup",
+						"Value" : "CloudFormationResource"
+					}
+				],
+				"SecurityGroupIngress" : [{
+						"IpProtocol" : "tcp",
+						"FromPort" : "22",
+						"ToPort" : "22",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "BastionServerSecurityGroup", "GroupId" ]
+						}
+					},{
+						"IpProtocol" : "tcp",
+						"FromPort" : "80",
+						"ToPort" : "80",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "GWServerSecurityGroup", "GroupId" ]
+						}
+					}
+				]
+			}
+		},
+		"MiddlewareExternalGatewaySecurityGroup" : {
+			"Type" : "AWS::EC2::SecurityGroup",
+			"DependsOn" : "AttachGateway",
+			"Properties" : {
+				"GroupDescription" : "Security Group for MiddlewareExternalGateway servers",
+				"VpcId" : {
+					"Ref" : "VPC"
+				},
+				"Tags" : [{
+						"Key" : "Name",
+						"Value" : "MiddlewareExternalGatewaySecurityGroup"
+					}, {
+						"Key" : "ResourceGroup",
+						"Value" : "CloudFormationResource"
+					}
+				],
+				"SecurityGroupIngress" : [{
+						"IpProtocol" : "tcp",
+						"FromPort" : "22",
+						"ToPort" : "22",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "BastionServerSecurityGroup", "GroupId" ]
+						}
+					},{
+						"IpProtocol" : "tcp",
+						"FromPort" : "80",
+						"ToPort" : "80",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "AdminServerSecurityGroup", "GroupId" ]
+						}
+					}
+				]
+			}
+		},
+		"NotificationServiceSecurityGroup" : {
+			"Type" : "AWS::EC2::SecurityGroup",
+			"DependsOn" : "AttachGateway",
+			"Properties" : {
+				"GroupDescription" : "Security Group for NotificationService servers",
+				"VpcId" : {
+					"Ref" : "VPC"
+				},
+				"Tags" : [{
+						"Key" : "Name",
+						"Value" : "NotificationServiceSecurityGroup"
+					}, {
+						"Key" : "ResourceGroup",
+						"Value" : "CloudFormationResource"
+					}
+				],
+				"SecurityGroupIngress" : [{
+						"IpProtocol" : "tcp",
+						"FromPort" : "22",
+						"ToPort" : "22",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "BastionServerSecurityGroup", "GroupId" ]
+						}
+					},{
+						"IpProtocol" : "tcp",
+						"FromPort" : "80",
+						"ToPort" : "80",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "MiddlewareExternalGatewaySecurityGroup", "GroupId" ]
+						}
+					}
+				]
+			}
+		},
+		"OracleSecurityGroup" : {
+			"Type" : "AWS::EC2::SecurityGroup",
+			"DependsOn" : "AttachGateway",
+			"Properties" : {
+				"GroupDescription" : "Security Group for Oracle servers",
+				"VpcId" : {
+					"Ref" : "VPC"
+				},
+				"Tags" : [{
+						"Key" : "Name",
+						"Value" : "OracleSecurityGroup"
+					}, {
+						"Key" : "ResourceGroup",
+						"Value" : "CloudFormationResource"
+					}
+				],
+				"SecurityGroupIngress" : [{
+						"IpProtocol" : "tcp",
+						"FromPort" : "22",
+						"ToPort" : "22",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "BastionServerSecurityGroup", "GroupId" ]
+						}
+					},{
+						"IpProtocol" : "tcp",
+						"FromPort" : "3306",
+						"ToPort" : "3306",
+						"SourceSecurityGroupId": {
+							"Fn::GetAtt": [ "NotificationServiceSecurityGroup", "GroupId" ]
+						}
+					}
+				]
 			}
 		}
 	}
